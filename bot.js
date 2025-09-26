@@ -1,17 +1,22 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode');           // para gerar QR em base64 para imagem
-const qrcodeTerminal = require('qrcode-terminal');  // para mostrar QR no terminal
+const qrcode = require('qrcode');
+const qrcodeTerminal = require('qrcode-terminal');
 const express = require('express');
 const cron = require('node-cron');
 
 const app = express();
-const DEBUG = true;
+
+let lastQRCode = null;
+let BOT_ID = null;
 const WARNING_COOLDOWN_MS = 7000;
+const DEBUG = true;
+const lastWarningAt = new Map();
 
 const client = new Client({
   authStrategy: new LocalAuth({ clientId: 'bot-session' }),
   puppeteer: {
     headless: true,
+    executablePath: '/usr/bin/google-chrome-stable', // Render Chrome
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -20,24 +25,22 @@ const client = new Client({
       '--no-zygote',
       '--disable-gpu',
       '--window-size=1280,720',
-      '--disable-background-networking',
-      '--disable-background-timer-throttling',
-      '--disable-client-side-phishing-detection',
-      '--disable-default-apps',
       '--disable-extensions',
-      '--disable-hang-monitor',
-      '--disable-popup-blocking',
-      '--disable-prompt-on-repost',
+      '--disable-background-networking',
       '--disable-sync',
-      '--metrics-recording-only',
+      '--disable-default-apps',
+      '--disable-popup-blocking',
+      '--disable-translate',
+      '--disable-background-timer-throttling',
+      '--disable-renderer-backgrounding',
+      '--force-color-profile=srgb',
       '--mute-audio',
       '--no-first-run',
-      '--safebrowsing-disable-auto-update'
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
     ]
   }
 });
-
-const lastWarningAt = new Map();
 
 function log(...args) {
   if (DEBUG) console.log(...args);
@@ -83,27 +86,28 @@ async function ensureChatParticipants(chat) {
   }
 }
 
-let BOT_ID = null;
-let lastQRCode = null;
-
-// Evento QR — atualiza variável lastQRCode e mostra QR no terminal
-client.on('qr', async (qr) => {
+client.on('qr', qr => {
   lastQRCode = qr;
   qrcodeTerminal.generate(qr, { small: true });
-  log('📲 QR gerado — escaneie com o WhatsApp.');
+  log('📲 QR Code gerado! Acesse /qr-image para escanear.');
 });
 
-// Cliente pronto
 client.on('ready', () => {
   log('✅ Cliente pronto!');
   try {
     const info = client.info || {};
     BOT_ID = normalizeId(info.wid || info.me || info);
-    log('BOT_ID determinado:', BOT_ID);
+    log('BOT_ID:', BOT_ID);
   } catch (e) {
     console.error('Não consegui determinar BOT_ID:', e);
   }
   scheduleGroupControl();
+});
+
+client.on('auth_failure', () => {
+  console.error('❌ Falha na autenticação. Reiniciando...');
+  client.destroy();
+  client.initialize();
 });
 
 client.on('message', async msg => {
@@ -115,20 +119,18 @@ client.on('message', async msg => {
     const senderContact = await msg.getContact();
     const rawSender = msg.author || (senderContact && senderContact.id) || msg.from;
     const SENDER_ID = normalizeId(rawSender);
-
     const senderParticipant = findParticipantById(chat, SENDER_ID);
     const senderIsAdmin = Boolean(senderParticipant && (senderParticipant.isAdmin || senderParticipant.isSuperAdmin));
 
     if (!BOT_ID && client.info) {
       BOT_ID = normalizeId(client.info.wid || client.info.me || client.info);
     }
-
     const botParticipant = findParticipantById(chat, BOT_ID);
     const botIsAdmin = Boolean(botParticipant && (botParticipant.isAdmin || botParticipant.isSuperAdmin));
 
     const text = (msg.body || '').toString().trim().toLowerCase();
 
-    // Comando !link — envia link do grupo
+    // Comando !link - envia link do grupo
     if (text === '!link') {
       try {
         const inviteCode = await chat.getInviteCode();
@@ -158,9 +160,7 @@ client.on('message', async msg => {
       try {
         await msg.delete(true);
         const mention = senderContact ? [senderContact] : [];
-        await chat.sendMessage(`⚠️ @${senderContact.number} — *Proibido enviar links! ❌*`, {
-          mentions: mention
-        });
+        await chat.sendMessage(`⚠️ @${senderContact.number} — *Proibido enviar links! ❌*`, { mentions: mention });
         lastWarningAt.set(chatIdKey, Date.now());
       } catch (err) {
         console.error('Erro ao apagar ou avisar:', err);
@@ -172,7 +172,7 @@ client.on('message', async msg => {
   }
 });
 
-// Função para fechar grupo (apenas admins)
+// Função para fechar grupo (admins)
 const closeGroup = async (chat) => {
   try {
     await ensureChatParticipants(chat);
@@ -187,7 +187,7 @@ const closeGroup = async (chat) => {
   }
 };
 
-// Função para abrir grupo (apenas admins)
+// Função para abrir grupo (admins)
 const openGroup = async (chat) => {
   try {
     await ensureChatParticipants(chat);
@@ -202,7 +202,7 @@ const openGroup = async (chat) => {
   }
 };
 
-// Cron para fechar grupo às 22h e abrir às 7h (horário America/Fortaleza)
+// Cron para fechar grupo às 22h e abrir às 7h no fuso America/Fortaleza
 const scheduleGroupControl = () => {
   cron.schedule('0 22 * * *', async () => {
     log('🔒 Fechando grupos (22:00)...');
@@ -236,47 +236,4 @@ app.get('/qr-image', async (req, res) => {
   }
   try {
     const dataUrl = await qrcode.toDataURL(lastQRCode);
-    const img = Buffer.from(dataUrl.split(',')[1], 'base64');
-    res.writeHead(200, {
-      'Content-Type': 'image/png',
-      'Content-Length': img.length,
-      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate'
-    });
-    res.end(img);
-  } catch (e) {
-    res.status(500).send('Erro ao gerar QR Code');
-  }
-});
-
-// Página simples para visualizar o QR Code no browser
-app.get('/', (req, res) => {
-  if (!lastQRCode) {
-    return res.send('<h3>QR Code ainda não gerado, aguarde...</h3>');
-  }
-  res.send(`
-    <html>
-      <head>
-        <title>WhatsApp QR Code</title>
-        <meta http-equiv="refresh" content="10" />
-        <style>
-          body { display:flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: Arial, sans-serif; }
-          img { width: 300px; height: 300px; }
-          p { margin-top: 10px; }
-        </style>
-      </head>
-      <body>
-        <h2>Escaneie o QR Code para conectar o WhatsApp</h2>
-        <img src="/qr-image" alt="QR Code WhatsApp" />
-        <p>A página atualiza a cada 10 segundos automaticamente.</p>
-      </body>
-    </html>
-  `);
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-  log(`🌐 Servidor rodando na porta ${PORT}`);
-});
-
-client.initialize();
-
+    const img = Buffer.from(dataUrl.split(',')[
