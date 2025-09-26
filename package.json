@@ -1,9 +1,24 @@
 {
+  "name": "whatsapp-bot",
+  "version": "1.0.0",
+  "description": "WhatsApp Bot para grupos",
+  "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "build": "echo 'Build completo'"
+    "dev": "node bot.js",
+    "build": "echo 'No build needed'"
+  },
+  "dependencies": {
+    "whatsapp-web.js": "^1.23.0",
+    "qrcode-terminal": "^0.12.0",
+    "qrcode": "^1.5.3",
+    "express": "^4.18.2",
+    "node-cron": "^3.0.3"
   },
   "engines": {
     "node": "18.x"
-  }
+  },
+  "keywords": ["whatsapp", "bot", "automation"],
+  "author": "Seu Nome",
+  "license": "MIT"
 }
