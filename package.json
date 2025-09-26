@@ -1,11 +1,10 @@
 {
-  "name": "whatsapp-bot-render",
+  "name": "whatsapp-bot",
   "version": "1.0.0",
-  "description": "WhatsApp Bot para Render",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "build": "echo 'Build completo'"
+    "build": "echo 'Build complete'"
   },
   "dependencies": {
     "whatsapp-web.js": "^1.23.0",
