@@ -11,18 +11,28 @@ const WARNING_COOLDOWN_MS = 7000;
 const client = new Client({
   authStrategy: new LocalAuth({ clientId: 'bot-session' }),
   puppeteer: {
-    headless: 'new',  // modo headless correto para ambiente sem X11
+    headless: true,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--disable-gpu',
-      '--disable-infobars',
-      '--window-size=1280,720',
-      '--hide-scrollbars',
       '--single-process',
-      '--no-zygote'
+      '--no-zygote',
+      '--disable-gpu',
+      '--window-size=1280,720',
+      '--disable-background-networking',
+      '--disable-background-timer-throttling',
+      '--disable-client-side-phishing-detection',
+      '--disable-default-apps',
+      '--disable-extensions',
+      '--disable-hang-monitor',
+      '--disable-popup-blocking',
+      '--disable-prompt-on-repost',
+      '--disable-sync',
+      '--metrics-recording-only',
+      '--mute-audio',
+      '--no-first-run',
+      '--safebrowsing-disable-auto-update'
     ]
   }
 });
@@ -269,3 +279,4 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 client.initialize();
+
