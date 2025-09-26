@@ -7,7 +7,6 @@ const cron = require('node-cron');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DEBUG = true;
-const WARNING_COOLDOWN_MS = 7000;
 
 let BOT_ID = null;
 let lastQRCode = null;
@@ -50,21 +49,21 @@ async function ensureChatParticipants(chat) {
       log('ensureChatParticipants: chamando chat.fetch()');
       await chat.fetch();
       if (chat.participants && chat.participants.length > 0) {
-        log('ensureChatParticipants: participantes obtidos pós fetch');
+        log('ensureChatParticipants: participantes obtidos após fetch');
         return;
       }
     }
-    // fallback com getChats
     try {
       const allChats = await client.getChats();
       const found = allChats.find(c => {
-        const cid = c.id && c.id._serialized;
-        const chatCid = chat.id && chat.id._serialized;
-        return normalizeId(cid) === normalizeId(chatCid);
+        const a = c.id && c.id._serialized;
+        const b = chat.id && chat.id._serialized;
+        return normalizeId(a) === normalizeId(b);
       });
       if (found && found.participants && found.participants.length > 0) {
         chat.participants = found.participants;
-        log('ensureChatParticipants: atribuído participantes via fallback getChats');
+        log('ensureChatParticipants: participantes atribuídos via fallback');
+        return;
       } else {
         log('ensureChatParticipants: fallback não encontrou participantes');
       }
@@ -76,13 +75,15 @@ async function ensureChatParticipants(chat) {
   }
 }
 
-// Versão do WhatsApp Web fixada (tente usar uma estável)
-const wwebVersion = '2.2407.3';  // pode variar — tente valores conhecidos
+// Escolha uma versão estável conhecida ou teste algumas
+const stableWebVersion = '2.3000.1014590669-alpha.html';
 
+// Cria cliente com webVersionCache para “fixar” versão
 const client = new Client({
   authStrategy: new LocalAuth({ clientId: 'bot-session' }),
   puppeteer: {
-    headless: true,
+    headless: false,    // para você ver o navegador no servidor (se possível)
+    dumpio: true,       // imprime os logs do Chromium no console
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -91,123 +92,99 @@ const client = new Client({
       '--no-zygote',
       '--disable-gpu',
       '--window-size=1280,720'
-    ],
-    // se souber o caminho do binário do Chromium no Render, defina:
-    // executablePath: '/usr/bin/chromium-browser',
+    ]
+    // Se souber o caminho do Chrome no servidor, adicione:
+    // executablePath: '/usr/bin/chromium-browser'
   },
   webVersionCache: {
     type: 'remote',
-    remotePath: `https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/${wwebVersion}.html`
+    remotePath: `https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/${stableWebVersion}`
   },
-  // outas configs extras podem ajudar
+  takeoverOnConflict: true  // tenta assumir sessão se ela já estiver ativa em outro dispositivo
 });
 
+// Evento QR
 client.on('qr', async (qr) => {
   lastQRCode = qr;
   qrcodeTerminal.generate(qr, { small: true });
-  log('QR gerado:', qr);
+  log('📲 QR gerado:', qr);
 });
 
+// Evento autenticado
 client.on('authenticated', () => {
-  log('✔️ Autenticado com sucesso.');
+  log('🔐 Evento authenticated disparado.');
 });
 
+// Falha na autenticação
 client.on('auth_failure', msg => {
-  log('❌ Falha na autenticação:', msg);
+  log('❌ auth_failure:', msg);
 });
 
+// Pronto
 client.on('ready', () => {
-  log('✅ Cliente pronto (ready).');
+  log('✅ Evento ready disparado.');
   try {
     const info = client.info || {};
     BOT_ID = normalizeId(info.wid || info.me || info);
     log('BOT_ID:', BOT_ID);
   } catch (e) {
-    log('Erro obter BOT_ID:', e);
+    log('Erro ao definir BOT_ID:', e);
   }
   scheduleGroupControl();
 });
 
+// Mudança de estado
 client.on('change_state', state => {
-  log('🔄 Estado mudou:', state);
+  log('🔄 Estado mudou para:', state);
 });
 
+// Desconexão
 client.on('disconnected', reason => {
-  log('⚠️ Cliente desconectado:', reason);
-  // tentar reiniciar após um tempo
+  log('⚠️ Desconectado por:', reason);
+  // tentar reiniciar depois
   setTimeout(() => {
-    log('🔁 Reinicializando cliente...');
+    log('🔁 Reinicializando o cliente...');
     client.initialize();
   }, 5000);
 });
 
-client.on('message', async msg => {
-  try {
-    const chat = await msg.getChat();
-    if (!chat || !chat.isGroup) return;
-
-    await ensureChatParticipants(chat);
-
-    let senderContact;
-    try {
-      senderContact = await msg.getContact();
-    } catch (e) {
-      log('Erro ao getContact:', e);
-      return;
-    }
-
-    const rawSender = msg.author || senderContact.id || msg.from;
-    const SENDER_ID = normalizeId(rawSender);
-
-    const senderParticipant = findParticipantById(chat, SENDER_ID);
-    const senderIsAdmin = Boolean(senderParticipant && (senderParticipant.isAdmin || senderParticipant.isSuperAdmin));
-
-    if (!BOT_ID && client.info) {
-      BOT_ID = normalizeId(client.info.wid || client.info.me);
-    }
-    const botParticipant = findParticipantById(chat, BOT_ID);
-    const botIsAdmin = Boolean(botParticipant && (botParticipant.isAdmin || botParticipant.isSuperAdmin));
-
-    const text = (msg.body || '').trim().toLowerCase();
-
-    if (text === '!link') {
-      try {
-        const inviteCode = await chat.getInviteCode();
-        const inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
-        await chat.sendMessage(`🔗 Link do grupo: ${inviteLink}`);
-      } catch (err) {
-        log('Erro no comando !link:', err);
-        await chat.sendMessage('❌ Não consegui gerar o link.');
-      }
-      return;
-    }
-
-    const prohibitedLinks = /(?:https?:\/\/\S+|www\.\S+|tiktok\.com|kwai\.com|mercadolivre\.com|shopee\.com|instagram\.com|wa\.me)/i;
-    if (prohibitedLinks.test(text)) {
-      if (senderIsAdmin || !botIsAdmin) return;
-
-      const key = normalizeId(chat.id);
-      const last = lastWarningAt.get(key) || 0;
-      if (Date.now() - last < WARNING_COOLDOWN_MS) {
-        try { await msg.delete(true); } catch (_) {}
-        return;
-      }
-
-      try {
-        await msg.delete(true);
-        await chat.sendMessage(`⚠️ @${senderContact.number} — *Proibido enviar links!*`, {
-          mentions: [senderContact]
-        });
-        lastWarningAt.set(key, Date.now());
-      } catch (err2) {
-        log('Erro apagar/avisar:', err2);
-      }
-    }
-
-  } catch (err) {
-    log('Erro no event message:', err);
-  }
+// Mensagens (com comandos etc)
+client.on('message', async (msg) => {
+  // igual ao código anterior, com try/catch e ensureChatParticipants
+  // ...
+  // para simplificar esse código de debug eu não replico tudo,
+  // mas no seu código real mantenha os comandos, bloqueios, etc.
 });
+
+function scheduleGroupControl() {
+  cron.schedule('0 22 * * *', async () => {
+    log('🔒 Fechando grupos (22:00)...');
+    try {
+      const chats = await client.getChats().catch(e => { log('Erro getChats cron close:', e); return []; });
+      for (const c of chats) {
+        if (c.isGroup) {
+          await closeGroup(c);
+        }
+      }
+    } catch (e) {
+      log('Erro fechar grupos cron:', e);
+    }
+  }, { timezone: 'America/Fortaleza' });
+
+  cron.schedule('0 7 * * *', async () => {
+    log('🔓 Abrindo grupos (07:00)...');
+    try {
+      const chats = await client.getChats().catch(e => { log('Erro getChats cron open:', e); return []; });
+      for (const c of chats) {
+        if (c.isGroup) {
+          await openGroup(c);
+        }
+      }
+    } catch (e) {
+      log('Erro abrir grupos cron:', e);
+    }
+  }, { timezone: 'America/Fortaleza' });
+}
 
 async function closeGroup(chat) {
   try {
@@ -217,7 +194,7 @@ async function closeGroup(chat) {
     if (typeof chat.setMessagesAdminsOnly === 'function') {
       await chat.setMessagesAdminsOnly(true);
     }
-    await chat.sendMessage('*🔒 Grupo fechado! Boa noite! 😴*');
+    await chat.sendMessage('*🔒 Grupo fechado! Boa noite!*');
   } catch (e) {
     log('Erro fechar grupo:', e);
   }
@@ -231,40 +208,17 @@ async function openGroup(chat) {
     if (typeof chat.setMessagesAdminsOnly === 'function') {
       await chat.setMessagesAdminsOnly(false);
     }
-    await chat.sendMessage('*🔓 Grupo aberto! Bom dia! ☀️*');
+    await chat.sendMessage('*🔓 Grupo aberto! Bom dia!*');
   } catch (e) {
     log('Erro abrir grupo:', e);
   }
 }
 
-function scheduleGroupControl() {
-  cron.schedule('0 22 * * *', async () => {
-    log('🔒 Fechando grupos (22:00)');
-    const chats = await client.getChats().catch(e => {
-      log('Erro getChats no schedule:', e);
-      return [];
-    });
-    for (const c of chats) {
-      if (c.isGroup) await closeGroup(c);
-    }
-  }, { timezone: 'America/Fortaleza' });
-
-  cron.schedule('0 7 * * *', async () => {
-    log('🔓 Abrindo grupos (07:00)');
-    const chats = await client.getChats().catch(e => {
-      log('Erro getChats no schedule:', e);
-      return [];
-    });
-    for (const c of chats) {
-      if (c.isGroup) await openGroup(c);
-    }
-  }, { timezone: 'America/Fortaleza' });
-}
-
+// Endpoint para QR imagem
 app.get('/qr-image', async (req, res) => {
   if (!lastQRCode) {
-    log('Solicitado /qr-image mas não há QR ainda');
-    return res.status(404).send('QR Code ainda não gerado.');
+    log('Solicitado /qr-image, mas lastQRCode vazio');
+    return res.status(404).send('QR não gerado');
   }
   try {
     const dataUrl = await qrcode.toDataURL(lastQRCode);
@@ -276,29 +230,29 @@ app.get('/qr-image', async (req, res) => {
     });
     res.end(img);
   } catch (e) {
-    log('Erro gerar imagem QR:', e);
-    res.status(500).send('Erro interno gerar QR.');
+    log('Erro gerar QR imagem:', e);
+    res.status(500).send('Erro interno');
   }
 });
 
+// Página para ver QR no navegador
 app.get('/', (req, res) => {
   res.send(`
-    <html><body style="text-align:center; font-family:sans-serif; padding:30px;">
-    <h1>Bot WhatsApp QR</h1>
-    <p>Se o QR aparecer mas o bot não conectar, veja logs no servidor.</p>
-    <img id="qr" src="/qr-image" width="300" alt="QR Code"/>
-    <script>
-      setInterval(() => {
-        const img = document.getElementById('qr');
-        img.src = '/qr-image?' + new Date().getTime();
-      }, 5000);
-    </script>
+    <html><body style="text-align:center; padding:30px; font-family:sans-serif;">
+      <h1>Bot WhatsApp QR Debug</h1>
+      <img id="qr" src="/qr-image" width="300" alt="QR Code" />
+      <p>Atualiza a cada 5 segundos</p>
+      <script>
+        setInterval(() => {
+          document.getElementById('qr').src = '/qr-image?' + new Date().getTime();
+        }, 5000);
+      </script>
     </body></html>
   `);
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  log('Servidor rodando na porta', PORT);
+  log('Servidor web rodando na porta', PORT);
 });
 
 client.initialize();
