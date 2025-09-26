@@ -1,13 +1,9 @@
 {
-  "name": "meu-whatsapp-bot",
-  "version": "1.0.0",
-  "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "build": "echo 'Build completo'"
   },
-  "dependencies": {
-    "whatsapp-web.js": "^1.23.0",
-    "qrcode-terminal": "^0.12.0",
-    "node-cron": "^3.0.2"
+  "engines": {
+    "node": "18.x"
   }
 }
