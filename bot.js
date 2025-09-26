@@ -5,310 +5,304 @@ const qrcode = require('qrcode');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Configuração específica para Render
-const PUBLIC_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
-
-console.log('🚀 Iniciando WhatsApp Bot...');
-console.log('📦 Versão do Node:', process.version);
-
-// Configuração otimizada para Render
+// Configuração do WhatsApp
 const client = new Client({
-  authStrategy: new LocalAuth({
-    clientId: 'bot-render',
-    dataPath: './.wwebjs_auth'
-  }),
-  puppeteer: {
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--disable-gpu',
-      '--single-process'
-    ],
-    executablePath: process.env.CHROMIUM_PATH || undefined
-  },
-  webVersionCache: {
-    type: 'remote',
-    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html'
-  }
+    authStrategy: new LocalAuth({
+        clientId: 'bot-render'
+    }),
+    puppeteer: {
+        headless: true,
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu'
+        ]
+    }
 });
 
-let qrCodeData = null;
+// Variáveis de estado
+let qrCodeImage = null;
 let isConnected = false;
-let clientInitialized = false;
+let statusMessage = '🔄 Iniciando...';
 
-// Middleware básico
-app.use(express.json());
-
-// Rota principal simplificada
-app.get('/', async (req, res) => {
-  try {
+// Rota principal - SIMPLIFICADA E FUNCIONAL
+app.get('/', (req, res) => {
     const html = `
     <!DOCTYPE html>
     <html>
     <head>
-        <title>WhatsApp Bot - Render</title>
+        <title>WhatsApp Bot</title>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
             body {
                 font-family: Arial, sans-serif;
-                margin: 0;
-                padding: 20px;
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 color: white;
                 min-height: 100vh;
                 display: flex;
                 justify-content: center;
                 align-items: center;
+                padding: 20px;
             }
             .container {
-                background: rgba(255,255,255,0.1);
-                padding: 30px;
-                border-radius: 15px;
+                background: rgba(255, 255, 255, 0.1);
+                padding: 40px;
+                border-radius: 20px;
                 backdrop-filter: blur(10px);
                 text-align: center;
-                max-width: 90%;
-                box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+                max-width: 500px;
+                width: 100%;
+                box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+            }
+            h1 {
+                margin-bottom: 20px;
+                font-size: 28px;
             }
             .status {
-                font-size: 24px;
+                font-size: 20px;
                 margin: 20px 0;
+                padding: 15px;
+                border-radius: 10px;
+                background: rgba(0, 0, 0, 0.3);
             }
             .connected { color: #4CAF50; }
-            .disconnected { color: #ff9800; }
-            .qrcode {
-                margin: 20px 0;
+            .waiting { color: #FF9800; }
+            .loading { color: #2196F3; }
+            .qrcode-container {
+                margin: 30px 0;
                 padding: 20px;
-                background: rgba(0,0,0,0.2);
+                background: rgba(255, 255, 255, 0.2);
+                border-radius: 15px;
+            }
+            .qrcode-container img {
+                max-width: 100%;
+                height: auto;
+                border: 5px solid white;
                 border-radius: 10px;
             }
-            .info {
-                background: rgba(0,0,0,0.3);
+            .instructions {
+                background: rgba(0, 0, 0, 0.3);
+                padding: 20px;
+                border-radius: 10px;
+                margin: 20px 0;
+                text-align: left;
+            }
+            .instructions ol {
+                margin-left: 20px;
+                margin-top: 10px;
+            }
+            .instructions li {
+                margin-bottom: 10px;
+            }
+            .url-info {
+                background: rgba(255, 255, 255, 0.2);
                 padding: 15px;
                 border-radius: 10px;
                 margin: 15px 0;
-                text-align: left;
+                word-break: break-all;
             }
         </style>
     </head>
     <body>
         <div class="container">
             <h1>🤖 WhatsApp Bot</h1>
-            <div class="info">
-                <strong>URL:</strong> ${PUBLIC_URL}<br>
-                <strong>Status:</strong> <span id="statusText">Carregando...</span>
+            
+            <div class="url-info">
+                <strong>🌐 URL do Bot:</strong><br>
+                ${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}
             </div>
             
-            <div id="content">
-                <div id="loading">🔄 Carregando...</div>
-                <div id="qrcode" style="display: none;"></div>
-                <div id="connected" style="display: none;"></div>
+            <div class="status" id="status">${statusMessage}</div>
+            
+            <div id="qrcode-container" class="qrcode-container">
+                ${qrCodeImage ? `<img src="${qrCodeImage}" alt="QR Code">` : '<p>QR Code será gerado aqui...</p>'}
             </div>
             
-            <div class="info">
-                <h3>📋 Instruções:</h3>
-                <p>1. WhatsApp → Menu → Dispositivos vinculados</p>
-                <p>2. Escaneie o QR Code</p>
-                <p>3. Aguarde a confirmação</p>
+            <div class="instructions">
+                <h3>📋 Como conectar:</h3>
+                <ol>
+                    <li>Abra o WhatsApp no celular</li>
+                    <li>Toque em ⋮ (Menu) → Dispositivos vinculados → Vincular um dispositivo</li>
+                    <li>Aponte a câmera para o QR Code acima</li>
+                    <li>Aguarde a confirmação de conexão</li>
+                </ol>
+            </div>
+            
+            <div style="margin-top: 20px;">
+                <button onclick="location.reload()" style="
+                    background: white;
+                    color: #667eea;
+                    border: none;
+                    padding: 10px 20px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    font-size: 16px;
+                    margin: 5px;
+                ">🔄 Atualizar Página</button>
+                
+                <button onclick="checkStatus()" style="
+                    background: #4CAF50;
+                    color: white;
+                    border: none;
+                    padding: 10px 20px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    font-size: 16px;
+                    margin: 5px;
+                ">📡 Verificar Status</button>
             </div>
         </div>
         
         <script>
-            function updateStatus(connected, qrCode) {
-                const statusText = document.getElementById('statusText');
-                const loading = document.getElementById('loading');
-                const qrcodeDiv = document.getElementById('qrcode');
-                const connectedDiv = document.getElementById('connected');
-                
-                if (connected) {
-                    statusText.innerHTML = '<span class="connected">✅ CONECTADO</span>';
-                    loading.style.display = 'none';
-                    qrcodeDiv.style.display = 'none';
-                    connectedDiv.style.display = 'block';
-                    connectedDiv.innerHTML = '<div class="status connected">🤖 Bot está funcionando!</div>';
-                } else if (qrCode) {
-                    statusText.innerHTML = '<span class="disconnected">⏳ AGUARDANDO QR CODE</span>';
-                    loading.style.display = 'none';
-                    qrcodeDiv.style.display = 'block';
-                    qrcodeDiv.innerHTML = '<div class="qrcode"><img src="' + qrCode + '" alt="QR Code" style="max-width: 300px; border: 5px solid white; border-radius: 10px;"></div>';
-                } else {
-                    statusText.innerHTML = '<span class="disconnected">🔄 INICIANDO...</span>';
-                }
+            function checkStatus() {
+                fetch('/status')
+                    .then(response => response.json())
+                    .then(data => {
+                        const statusElement = document.getElementById('status');
+                        const qrContainer = document.getElementById('qrcode-container');
+                        
+                        // Atualizar status
+                        if (data.connected) {
+                            statusElement.innerHTML = '✅ <strong>CONECTADO!</strong> Bot está funcionando.';
+                            statusElement.className = 'status connected';
+                            qrContainer.innerHTML = '<p>✅ Conectado com sucesso!</p>';
+                        } else if (data.qrCode) {
+                            statusElement.innerHTML = '📱 <strong>QR CODE DISPONÍVEL - Escaneie agora!</strong>';
+                            statusElement.className = 'status waiting';
+                            qrContainer.innerHTML = '<img src="' + data.qrCode + '" alt="QR Code">';
+                        } else {
+                            statusElement.innerHTML = '🔄 <strong>Aguardando QR Code...</strong>';
+                            statusElement.className = 'status loading';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Erro:', error);
+                    });
             }
             
-            // Verificar status a cada 3 segundos
-            async function checkStatus() {
-                try {
-                    const response = await fetch('/status');
-                    const data = await response.json();
-                    updateStatus(data.connected, data.qrCode);
-                } catch (error) {
-                    console.log('Erro ao verificar status:', error);
-                }
-            }
+            // Verificar status a cada 5 segundos
+            setInterval(checkStatus, 5000);
             
-            // Verificar status inicial
-            checkStatus();
-            
-            // Verificar a cada 3 segundos
-            setInterval(checkStatus, 3000);
+            // Verificar status ao carregar a página
+            document.addEventListener('DOMContentLoaded', checkStatus);
         </script>
     </body>
     </html>
     `;
     
     res.send(html);
-  } catch (error) {
-    res.status(500).send(`Erro: ${error.message}`);
-  }
 });
 
 // Rota de status
 app.get('/status', (req, res) => {
-  res.json({
-    connected: isConnected,
-    qrCode: qrCodeData ? `/qrimage` : null,
-    url: PUBLIC_URL,
-    timestamp: new Date().toISOString()
-  });
+    res.json({
+        connected: isConnected,
+        qrCode: qrCodeImage,
+        status: statusMessage,
+        timestamp: new Date().toISOString()
+    });
 });
 
-// Rota para imagem do QR Code
-app.get('/qrimage', async (req, res) => {
-  try {
-    if (!qrCodeData) {
-      return res.status(404).send('QR Code não disponível');
-    }
-    
-    const qrImage = await qrcode.toBuffer(qrCodeData);
-    res.setHeader('Content-Type', 'image/png');
-    res.send(qrImage);
-  } catch (error) {
-    res.status(500).send('Erro ao gerar QR Code');
-  }
-});
-
-// Health check para evitar sleeping
+// Health check
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    service: 'whatsapp-bot',
-    connected: isConnected,
-    timestamp: new Date().toISOString() 
-  });
+    res.json({ 
+        status: 'ok', 
+        connected: isConnected,
+        service: 'whatsapp-bot' 
+    });
 });
 
-// Event handlers do WhatsApp
+// Eventos do WhatsApp
 client.on('qr', async (qr) => {
-  console.log('📲 QR Code recebido');
-  qrCodeData = qr;
-  isConnected = false;
-  
-  // Gerar QR Code no terminal também (backup)
-  try {
-    const qrTerminal = require('qrcode-terminal');
-    qrTerminal.generate(qr, { small: true });
-  } catch (error) {
-    console.log('QR Code terminal não disponível');
-  }
+    console.log('📲 QR Code recebido - gerando imagem...');
+    statusMessage = '📱 QR Code gerado - Escaneie!';
+    
+    try {
+        // Gerar QR Code como Data URL
+        qrCodeImage = await qrcode.toDataURL(qr);
+        isConnected = false;
+        console.log('✅ QR Code imagem gerada com sucesso!');
+        
+        // Mostrar QR Code no terminal também
+        const qrTerminal = require('qrcode-terminal');
+        qrTerminal.generate(qr, { small: true });
+    } catch (error) {
+        console.error('❌ Erro ao gerar QR Code:', error);
+        statusMessage = '❌ Erro ao gerar QR Code';
+    }
 });
 
 client.on('ready', () => {
-  console.log('✅ WhatsApp Bot conectado e pronto!');
-  console.log('🌐 URL:', PUBLIC_URL);
-  isConnected = true;
-  qrCodeData = null;
+    console.log('✅ WhatsApp Bot conectado e pronto!');
+    statusMessage = '✅ Conectado! Bot funcionando.';
+    isConnected = true;
+    qrCodeImage = null;
 });
 
 client.on('authenticated', () => {
-  console.log('🔐 Autenticado com sucesso');
-  isConnected = true;
+    console.log('🔐 Autenticado com sucesso');
+    statusMessage = '🔐 Autenticado - Conectando...';
 });
 
 client.on('auth_failure', (msg) => {
-  console.log('❌ Falha na autenticação:', msg);
-  isConnected = false;
+    console.log('❌ Falha na autenticação:', msg);
+    statusMessage = '❌ Falha na autenticação';
+    isConnected = false;
 });
 
 client.on('disconnected', (reason) => {
-  console.log('🔌 Desconectado:', reason);
-  isConnected = false;
-  
-  // Tentar reconectar após 10 segundos
-  setTimeout(() => {
-    console.log('🔄 Tentando reconectar...');
-    client.initialize();
-  }, 10000);
-});
-
-client.on('message', async (msg) => {
-  // Seu código de mensagens aqui (mantenha o original)
-  try {
-    const chat = await msg.getChat();
-    if (!chat || !chat.isGroup) return;
-
-    const text = (msg.body || '').toString().trim().toLowerCase();
-
-    // Comando !link
-    if (text === '!link') {
-      try {
-        const inviteCode = await chat.getInviteCode();
-        const inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
-        await chat.sendMessage(`🔗 Link do grupo: ${inviteLink}`);
-      } catch (err) {
-        await chat.sendMessage('*❌ Não consegui obter o link. Verifique se sou admin do grupo.*');
-      }
-      return;
-    }
-
-    // Detecção de links proibidos (mantenha sua lógica original)
-    const prohibitedLinks = /(?:https?:\/\/\S+|www\.\S+|tiktok\.com|kwai\.com|mercadolivre\.com|shopee\.com|instagram\.com|wa\.me)/i;
+    console.log('🔌 Desconectado:', reason);
+    statusMessage = '🔌 Desconectado - Reconectando...';
+    isConnected = false;
     
-    if (prohibitedLinks.test(text)) {
-      // Sua lógica original de moderação aqui
-    }
-
-  } catch (err) {
-    console.error('Erro na mensagem:', err);
-  }
-});
-
-// Inicialização segura
-async function initializeBot() {
-  try {
-    console.log('🔧 Inicializando servidor web...');
-    
-    // Iniciar servidor
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log('🌐 Servidor rodando na porta:', PORT);
-      console.log('📱 URL do QR Code:', PUBLIC_URL);
-      console.log('❤️  Health check:', `${PUBLIC_URL}/health`);
-    });
-
-    // Aguardar um pouco antes de iniciar o WhatsApp
+    // Reconectar após 5 segundos
     setTimeout(() => {
-      console.log('🔧 Inicializando cliente WhatsApp...');
-      client.initialize();
-      clientInitialized = true;
-    }, 3000);
+        console.log('🔄 Tentando reconectar...');
+        client.initialize();
+    }, 5000);
+});
 
-  } catch (error) {
-    console.error('❌ Erro na inicialização:', error);
-    process.exit(1);
-  }
-}
+// Inicialização
+console.log('🚀 Iniciando WhatsApp Bot...');
+console.log('📦 Dependências carregadas');
 
-// Inicializar o bot
-initializeBot();
+// Iniciar servidor
+app.listen(PORT, '0.0.0.0', () => {
+    console.log('🌐 Servidor web rodando na porta:', PORT);
+    console.log('📍 URL local: http://localhost:' + PORT);
+    if (process.env.RENDER_EXTERNAL_URL) {
+        console.log('🌐 URL pública:', process.env.RENDER_EXTERNAL_URL);
+    }
+    
+    // Iniciar WhatsApp após o servidor estar rodando
+    setTimeout(() => {
+        console.log('🔧 Inicializando WhatsApp Web...');
+        client.initialize();
+    }, 2000);
+});
 
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('🛑 Desligando bot...');
-  client.destroy();
-  process.exit(0);
+// Mensagem simples para teste
+client.on('message', message => {
+    if (message.body === '!ping') {
+        message.reply('pong');
+    }
+});
+
+// Log de erro global
+process.on('uncaughtException', (error) => {
+    console.error('❌ Erro não capturado:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Promise rejeitada:', reason);
 });
