@@ -40,45 +40,45 @@ function findParticipantById(chat, idSerialized) {
 async function ensureChatParticipants(chat) {
   try {
     if (!chat) {
-      log('ensureChatParticipants: chat indefinido');
+      log('ensureChatParticipants: chat é nulo');
       return;
     }
-
     if (chat.participants && chat.participants.length > 0) {
       return;
     }
-
     if (typeof chat.fetch === 'function') {
-      log('ensureChatParticipants: chamando chat.fetch()...');
+      log('ensureChatParticipants: chamando chat.fetch()');
       await chat.fetch();
       if (chat.participants && chat.participants.length > 0) {
-        log('ensureChatParticipants: participantes carregados depois fetch');
+        log('ensureChatParticipants: participantes obtidos pós fetch');
         return;
       }
     }
-
-    // fallback
+    // fallback com getChats
     try {
       const allChats = await client.getChats();
-      for (const c of allChats) {
-        if (c.id && chat.id && c.id._serialized === chat.id._serialized) {
-          if (c.participants && c.participants.length > 0) {
-            chat.participants = c.participants;
-            log('ensureChatParticipants: participantes atribuídos via fallback');
-            return;
-          }
-        }
+      const found = allChats.find(c => {
+        const cid = c.id && c.id._serialized;
+        const chatCid = chat.id && chat.id._serialized;
+        return normalizeId(cid) === normalizeId(chatCid);
+      });
+      if (found && found.participants && found.participants.length > 0) {
+        chat.participants = found.participants;
+        log('ensureChatParticipants: atribuído participantes via fallback getChats');
+      } else {
+        log('ensureChatParticipants: fallback não encontrou participantes');
       }
-      log('ensureChatParticipants: fallback não encontrou participantes');
-    } catch (er) {
-      log('Erro no fallback getChats:', er);
+    } catch (e2) {
+      log('Fallback getChats erro:', e2);
     }
   } catch (err) {
     log('Erro em ensureChatParticipants:', err);
   }
 }
 
-// Criação do client com flags extras
+// Versão do WhatsApp Web fixada (tente usar uma estável)
+const wwebVersion = '2.2407.3';  // pode variar — tente valores conhecidos
+
 const client = new Client({
   authStrategy: new LocalAuth({ clientId: 'bot-session' }),
   puppeteer: {
@@ -92,26 +92,24 @@ const client = new Client({
       '--disable-gpu',
       '--window-size=1280,720'
     ],
-    // Se possível, definir executablePath se souber do chromium no Render
-    // executablePath: '/usr/bin/chromium-browser'
+    // se souber o caminho do binário do Chromium no Render, defina:
+    // executablePath: '/usr/bin/chromium-browser',
   },
-  // Possível experimento se precisar:
-  // webVersionCache: {
-  //   type: 'remote',
-  //   remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1014590669-alpha.html'
-  // }
+  webVersionCache: {
+    type: 'remote',
+    remotePath: `https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/${wwebVersion}.html`
+  },
+  // outas configs extras podem ajudar
 });
-
-// Eventos pra debugar
 
 client.on('qr', async (qr) => {
   lastQRCode = qr;
   qrcodeTerminal.generate(qr, { small: true });
-  log('📲 QR code emitido.');
+  log('QR gerado:', qr);
 });
 
 client.on('authenticated', () => {
-  log('🔐 Autenticado com sucesso!');
+  log('✔️ Autenticado com sucesso.');
 });
 
 client.on('auth_failure', msg => {
@@ -125,7 +123,7 @@ client.on('ready', () => {
     BOT_ID = normalizeId(info.wid || info.me || info);
     log('BOT_ID:', BOT_ID);
   } catch (e) {
-    log('Erro ao definir BOT_ID:', e);
+    log('Erro obter BOT_ID:', e);
   }
   scheduleGroupControl();
 });
@@ -136,22 +134,27 @@ client.on('change_state', state => {
 
 client.on('disconnected', reason => {
   log('⚠️ Cliente desconectado:', reason);
-  // tentar reconectar
-  client.initialize();
+  // tentar reiniciar após um tempo
+  setTimeout(() => {
+    log('🔁 Reinicializando cliente...');
+    client.initialize();
+  }, 5000);
 });
 
-// Mensagens, comandos, etc (igual ao seu código original, com ensureChatParticipants)
 client.on('message', async msg => {
   try {
     const chat = await msg.getChat();
     if (!chat || !chat.isGroup) return;
 
     await ensureChatParticipants(chat);
-    const senderContact = await msg.getContact().catch(e => {
-      log('Erro getContact:', e);
-      return null;
-    });
-    if (!senderContact) return;
+
+    let senderContact;
+    try {
+      senderContact = await msg.getContact();
+    } catch (e) {
+      log('Erro ao getContact:', e);
+      return;
+    }
 
     const rawSender = msg.author || senderContact.id || msg.from;
     const SENDER_ID = normalizeId(rawSender);
@@ -162,7 +165,6 @@ client.on('message', async msg => {
     if (!BOT_ID && client.info) {
       BOT_ID = normalizeId(client.info.wid || client.info.me);
     }
-
     const botParticipant = findParticipantById(chat, BOT_ID);
     const botIsAdmin = Boolean(botParticipant && (botParticipant.isAdmin || botParticipant.isSuperAdmin));
 
@@ -174,8 +176,8 @@ client.on('message', async msg => {
         const inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
         await chat.sendMessage(`🔗 Link do grupo: ${inviteLink}`);
       } catch (err) {
-        log('Erro no !link:', err);
-        await chat.sendMessage('❌ Não consegui gerar o link. Verifique se sou admin.');
+        log('Erro no comando !link:', err);
+        await chat.sendMessage('❌ Não consegui gerar o link.');
       }
       return;
     }
@@ -187,7 +189,7 @@ client.on('message', async msg => {
       const key = normalizeId(chat.id);
       const last = lastWarningAt.get(key) || 0;
       if (Date.now() - last < WARNING_COOLDOWN_MS) {
-        try { await msg.delete(true); } catch(e) {}
+        try { await msg.delete(true); } catch (_) {}
         return;
       }
 
@@ -197,17 +199,16 @@ client.on('message', async msg => {
           mentions: [senderContact]
         });
         lastWarningAt.set(key, Date.now());
-      } catch(err2) {
+      } catch (err2) {
         log('Erro apagar/avisar:', err2);
       }
     }
 
   } catch (err) {
-    log('Erro evento message:', err);
+    log('Erro no event message:', err);
   }
 });
 
-// Funções de controle de grupo
 async function closeGroup(chat) {
   try {
     await ensureChatParticipants(chat);
@@ -238,34 +239,31 @@ async function openGroup(chat) {
 
 function scheduleGroupControl() {
   cron.schedule('0 22 * * *', async () => {
-    log('🔒 Fechando grupos às 22:00');
-    try {
-      const chats = await client.getChats();
-      for (const c of chats) {
-        if (c.isGroup) await closeGroup(c);
-      }
-    } catch (e) {
-      log('Erro fechar grupos:', e);
+    log('🔒 Fechando grupos (22:00)');
+    const chats = await client.getChats().catch(e => {
+      log('Erro getChats no schedule:', e);
+      return [];
+    });
+    for (const c of chats) {
+      if (c.isGroup) await closeGroup(c);
     }
   }, { timezone: 'America/Fortaleza' });
 
   cron.schedule('0 7 * * *', async () => {
-    log('🔓 Abrindo grupos às 07:00');
-    try {
-      const chats = await client.getChats();
-      for (const c of chats) {
-        if (c.isGroup) await openGroup(c);
-      }
-    } catch (e) {
-      log('Erro abrir grupos:', e);
+    log('🔓 Abrindo grupos (07:00)');
+    const chats = await client.getChats().catch(e => {
+      log('Erro getChats no schedule:', e);
+      return [];
+    });
+    for (const c of chats) {
+      if (c.isGroup) await openGroup(c);
     }
   }, { timezone: 'America/Fortaleza' });
 }
 
-// Servir QR code imagem
 app.get('/qr-image', async (req, res) => {
   if (!lastQRCode) {
-    log('Solicitado /qr-image sem QR');
+    log('Solicitado /qr-image mas não há QR ainda');
     return res.status(404).send('QR Code ainda não gerado.');
   }
   try {
@@ -278,24 +276,23 @@ app.get('/qr-image', async (req, res) => {
     });
     res.end(img);
   } catch (e) {
-    log('Erro no /qr-image:', e);
-    res.status(500).send('Erro interno gerar imagem QR.');
+    log('Erro gerar imagem QR:', e);
+    res.status(500).send('Erro interno gerar QR.');
   }
 });
 
-// Página para ver QR com auto refresh
 app.get('/', (req, res) => {
   res.send(`
-    <html><body style="text-align:center;font-family:sans-serif;padding:30px;">
-      <h1>WhatsApp Bot QR</h1>
-      <img id="qr" src="/qr-image" width="300" alt="QR Code"/>
-      <p>Atualizando QR a cada 5 segundos</p>
-      <script>
-        setInterval(() => {
-          const img = document.getElementById('qr');
-          img.src = '/qr-image?' + new Date().getTime();
-        }, 5000);
-      </script>
+    <html><body style="text-align:center; font-family:sans-serif; padding:30px;">
+    <h1>Bot WhatsApp QR</h1>
+    <p>Se o QR aparecer mas o bot não conectar, veja logs no servidor.</p>
+    <img id="qr" src="/qr-image" width="300" alt="QR Code"/>
+    <script>
+      setInterval(() => {
+        const img = document.getElementById('qr');
+        img.src = '/qr-image?' + new Date().getTime();
+      }, 5000);
+    </script>
     </body></html>
   `);
 });
