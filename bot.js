@@ -1,5 +1,6 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode');
+const qrcode = require('qrcode');           // para gerar QR em base64 para imagem
+const qrcodeTerminal = require('qrcode-terminal');  // para mostrar QR no terminal
 const express = require('express');
 const cron = require('node-cron');
 
@@ -44,10 +45,7 @@ function findParticipantById(chat, idSerialized) {
   if (!chat || !chat.participants || !idSerialized) return undefined;
   return chat.participants.find(p => {
     if (!p || !p.id) return false;
-    const pid =
-      p.id._serialized ||
-      (p.id.user ? `${p.id.user}@c.us` : null) ||
-      (p.id.id && p.id.id._serialized ? p.id.id._serialized : null);
+    const pid = p.id._serialized || (p.id.user ? `${p.id.user}@c.us` : null) || (p.id.id && p.id.id._serialized ? p.id.id._serialized : null);
     return pid === idSerialized;
   });
 }
@@ -62,11 +60,7 @@ async function ensureChatParticipants(chat) {
       if (chat.participants && chat.participants.length > 0) return;
     }
     const all = await client.getChats();
-    const found = all.find(
-      c =>
-        normalizeId(c.id && c.id._serialized) ===
-        normalizeId(chat.id && chat.id._serialized)
-    );
+    const found = all.find(c => normalizeId(c.id && c.id._serialized) === normalizeId(chat.id && chat.id._serialized));
     if (found && found.participants && found.participants.length > 0) {
       chat.participants = found.participants;
       log('Participantes carregados via fallback getChats().');
@@ -79,9 +73,10 @@ async function ensureChatParticipants(chat) {
 let BOT_ID = null;
 let lastQRCode = null;
 
+// Evento QR — atualiza variável lastQRCode e mostra QR no terminal
 client.on('qr', async (qr) => {
   lastQRCode = qr;
-  qrcode.generate(qr, { small: true });
+  qrcodeTerminal.generate(qr, { small: true });
   log('📲 QR gerado — escaneie com o WhatsApp.');
 });
 
@@ -97,17 +92,7 @@ client.on('ready', () => {
   scheduleGroupControl();
 });
 
-client.on('auth_failure', (msg) => {
-  console.error('⚠️ Falha na autenticação:', msg);
-});
-
-client.on('disconnected', (reason) => {
-  console.log('⚠️ Cliente desconectado:', reason, 'Tentando reiniciar...');
-  client.destroy();
-  setTimeout(() => client.initialize(), 5000);
-});
-
-client.on('message', async (msg) => {
+client.on('message', async msg => {
   try {
     const chat = await msg.getChat();
     if (!chat || !chat.isGroup) return;
@@ -129,6 +114,7 @@ client.on('message', async (msg) => {
 
     const text = (msg.body || '').toString().trim().toLowerCase();
 
+    // Comando !link — envia link do grupo
     if (text === '!link') {
       try {
         const inviteCode = await chat.getInviteCode();
@@ -141,6 +127,7 @@ client.on('message', async (msg) => {
       return;
     }
 
+    // Bloqueio de links proibidos
     const prohibitedLinks = /(?:https?:\/\/\S+|www\.\S+|tiktok\.com|kwai\.com|mercadolivre\.com|shopee\.com|instagram\.com|wa\.me)/i;
 
     if (prohibitedLinks.test(text)) {
@@ -150,9 +137,7 @@ client.on('message', async (msg) => {
       const chatIdKey = normalizeId(chat.id && chat.id._serialized) || chat.id;
       const last = lastWarningAt.get(chatIdKey) || 0;
       if (Date.now() - last < WARNING_COOLDOWN_MS) {
-        try {
-          await msg.delete(true);
-        } catch (e) {}
+        try { await msg.delete(true); } catch (e) {}
         return;
       }
 
@@ -167,11 +152,13 @@ client.on('message', async (msg) => {
         console.error('Erro ao apagar ou avisar:', err);
       }
     }
+
   } catch (err) {
     console.error('Erro na mensagem:', err);
   }
 });
 
+// Função para fechar grupo (apenas admins)
 const closeGroup = async (chat) => {
   try {
     await ensureChatParticipants(chat);
@@ -186,6 +173,7 @@ const closeGroup = async (chat) => {
   }
 };
 
+// Função para abrir grupo (apenas admins)
 const openGroup = async (chat) => {
   try {
     await ensureChatParticipants(chat);
@@ -200,6 +188,7 @@ const openGroup = async (chat) => {
   }
 };
 
+// Cron para fechar grupo às 22h e abrir às 7h (horário America/Fortaleza)
 const scheduleGroupControl = () => {
   cron.schedule('0 22 * * *', async () => {
     log('🔒 Fechando grupos (22:00)...');
@@ -226,7 +215,7 @@ const scheduleGroupControl = () => {
   }, { timezone: 'America/Fortaleza' });
 };
 
-// Servidor Express para servir QR Code atualizado
+// Endpoint para servir a imagem do QR Code sempre atualizada
 app.get('/qr-image', async (req, res) => {
   if (!lastQRCode) {
     return res.status(404).send('QR Code ainda não gerado, aguarde...');
@@ -247,7 +236,7 @@ app.get('/qr-image', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🌐 Servidor rodando na porta ${PORT}`);
+  log(`🌐 Servidor rodando na porta ${PORT}`);
 });
 
 client.initialize();
