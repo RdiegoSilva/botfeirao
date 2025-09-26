@@ -1,6 +1,6 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode');           // para gerar QR em base64 para imagem
-const qrcodeTerminal = require('qrcode-terminal');  // para mostrar QR no terminal
+const qrcode = require('qrcode');           // gerar QR em base64
+const qrcodeTerminal = require('qrcode-terminal');  // mostrar QR no terminal
 const express = require('express');
 const cron = require('node-cron');
 
@@ -232,6 +232,33 @@ app.get('/qr-image', async (req, res) => {
   } catch (e) {
     res.status(500).send('Erro ao gerar QR Code');
   }
+});
+
+// Página web simples que mostra o QR Code e atualiza a cada 5 segundos
+app.get('/', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>WhatsApp Bot QR Code</title>
+      <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 30px; }
+        img { max-width: 300px; margin-top: 20px; }
+      </style>
+    </head>
+    <body>
+      <h1>Escaneie o QR Code do WhatsApp</h1>
+      <p>Atualiza automaticamente a cada 5 segundos.</p>
+      <img id="qr" src="/qr-image" alt="QR Code WhatsApp" />
+      <script>
+        setInterval(() => {
+          const img = document.getElementById('qr');
+          img.src = '/qr-image?' + new Date().getTime(); // evita cache
+        }, 5000);
+      </script>
+    </body>
+    </html>
+  `);
 });
 
 const PORT = process.env.PORT || 3000;
