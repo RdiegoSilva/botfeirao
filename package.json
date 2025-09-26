@@ -1,15 +1,16 @@
 {
-  "name": "whatsapp-bot",
+  "name": "whatsapp-bot-completo",
   "version": "1.0.0",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "build": "echo 'Build complete'"
+    "build": "echo 'Build completo'"
   },
   "dependencies": {
     "whatsapp-web.js": "^1.23.0",
     "qrcode": "^1.5.3",
     "express": "^4.18.2",
+    "node-cron": "^3.0.3",
     "qrcode-terminal": "^0.12.0"
   },
   "engines": {
