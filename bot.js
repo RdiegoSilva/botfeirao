@@ -132,6 +132,35 @@ client.on('message', async msg => {
 
     // Comando !link - envia link do grupo
     if (text === '!link') {
+      if (!botIsAdmin) {
+        await chat.sendMessage('*❌ Preciso ser admin para gerar o link do grupo!*');
+        return;
+      }
+      try {
+        const inviteCode = await chat.getInviteCode();
+        if (!inviteCode) {
+          await chat.sendMessage('*❌ Não consegui obter o código do convite. Talvez o link esteja desativado.*');
+          return;
+        }
+        const inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
+        await chat.sendMessage(`🔗 Link do grupo: ${inviteLink}`);
+      } catch (err) {
+        console.error('Erro ao gerar link:', err);
+        await chat.sendMessage('*❌ Erro ao gerar o link. Certifique-se que sou admin e que o link do grupo está ativado.*');
+      }
+      return;
+    }
+
+    // O resto do seu código para bloqueio de links e etc...
+
+  } catch (err) {
+    console.error('Erro na mensagem:', err);
+  }
+});
+
+
+    // Comando !link - envia link do grupo
+    if (text === '!link') {
       try {
         const inviteCode = await chat.getInviteCode();
         const inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
@@ -237,3 +266,4 @@ app.get('/qr-image', async (req, res) => {
   try {
     const dataUrl = await qrcode.toDataURL(lastQRCode);
     const img = Buffer.from(dataUrl.split(',')[
+
