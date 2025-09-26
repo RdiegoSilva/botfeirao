@@ -1,17 +1,22 @@
 {
   "name": "whatsapp-bot",
   "version": "1.0.0",
+  "description": "Bot WhatsApp usando whatsapp-web.js no Render",
   "main": "bot.js",
-  "type": "module",
   "scripts": {
     "start": "node bot.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "whatsapp-web.js": "^1.23.0",
+    "node-cron": "^3.0.2",
+    "puppeteer": "^22.0.0",
     "qrcode": "^1.5.1",
     "qrcode-terminal": "^0.12.0",
-    "node-cron": "^3.0.2",
-    "puppeteer": "^22.0.0"
-  }
+    "whatsapp-web.js": "^1.23.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "author": "",
+  "license": "MIT"
 }
