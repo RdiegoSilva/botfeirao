@@ -1,46 +1,33 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode');
-const qrcodeTerminal = require('qrcode-terminal');
+const qrcode = require('qrcode');  // para gerar imagem base64
+const qrcodeTerminal = require('qrcode-terminal');  // terminal
 const express = require('express');
 const cron = require('node-cron');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+const DEBUG = true;
+const WARNING_COOLDOWN_MS = 7000;
 
 let lastQRCode = null;
 let BOT_ID = null;
-const WARNING_COOLDOWN_MS = 7000;
-const DEBUG = true;
 const lastWarningAt = new Map();
 
 const client = new Client({
   authStrategy: new LocalAuth({ clientId: 'bot-session' }),
   puppeteer: {
     headless: true,
-    executablePath: '/usr/bin/google-chrome-stable', // Render Chrome
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--single-process',
-      '--no-zygote',
-      '--disable-gpu',
-      '--window-size=1280,720',
-      '--disable-extensions',
-      '--disable-background-networking',
-      '--disable-sync',
-      '--disable-default-apps',
-      '--disable-popup-blocking',
-      '--disable-translate',
-      '--disable-background-timer-throttling',
-      '--disable-renderer-backgrounding',
-      '--force-color-profile=srgb',
-      '--mute-audio',
-      '--no-first-run',
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
+      '--no-zygote'
     ]
   }
 });
+
+// ===== UTILS =====
 
 function log(...args) {
   if (DEBUG) console.log(...args);
@@ -53,15 +40,14 @@ function normalizeId(id) {
   if (id.user) return `${id.user}@c.us`;
   try {
     if (id.id && id.id._serialized) return id.id._serialized;
-  } catch (e) {}
+  } catch {}
   return null;
 }
 
 function findParticipantById(chat, idSerialized) {
   if (!chat || !chat.participants || !idSerialized) return undefined;
   return chat.participants.find(p => {
-    if (!p || !p.id) return false;
-    const pid = p.id._serialized || (p.id.user ? `${p.id.user}@c.us` : null) || (p.id.id && p.id.id._serialized ? p.id.id._serialized : null);
+    const pid = normalizeId(p.id);
     return pid === idSerialized;
   });
 }
@@ -70,129 +56,83 @@ async function ensureChatParticipants(chat) {
   try {
     if (!chat) return;
     if (chat.participants && chat.participants.length > 0) return;
-    if (typeof chat.fetch === 'function') {
-      log('Tentando chat.fetch()...');
-      await chat.fetch();
-      if (chat.participants && chat.participants.length > 0) return;
-    }
+    if (typeof chat.fetch === 'function') await chat.fetch();
+    if (chat.participants && chat.participants.length > 0) return;
     const all = await client.getChats();
-    const found = all.find(c => normalizeId(c.id && c.id._serialized) === normalizeId(chat.id && chat.id._serialized));
-    if (found && found.participants && found.participants.length > 0) {
-      chat.participants = found.participants;
-      log('Participantes carregados via fallback getChats().');
-    }
+    const found = all.find(c => normalizeId(c.id) === normalizeId(chat.id));
+    if (found && found.participants) chat.participants = found.participants;
   } catch (e) {
     console.error('Erro em ensureChatParticipants:', e);
   }
 }
 
-client.on('qr', qr => {
+// ===== EVENTOS =====
+
+client.on('qr', (qr) => {
   lastQRCode = qr;
+  log('📲 Novo QR gerado!');
   qrcodeTerminal.generate(qr, { small: true });
-  log('📲 QR Code gerado! Acesse /qr-image para escanear.');
 });
 
 client.on('ready', () => {
-  log('✅ Cliente pronto!');
-  try {
-    const info = client.info || {};
-    BOT_ID = normalizeId(info.wid || info.me || info);
-    log('BOT_ID:', BOT_ID);
-  } catch (e) {
-    console.error('Não consegui determinar BOT_ID:', e);
-  }
+  log('✅ Cliente conectado!');
+  if (client.info) BOT_ID = normalizeId(client.info.wid);
   scheduleGroupControl();
 });
 
-client.on('auth_failure', () => {
-  console.error('❌ Falha na autenticação. Reiniciando...');
-  client.destroy();
-  client.initialize();
+client.on('auth_failure', (msg) => {
+  console.error('❌ Falha na autenticação:', msg);
 });
 
 client.on('message', async msg => {
   try {
     const chat = await msg.getChat();
-    if (!chat || !chat.isGroup) return;
+    if (!chat.isGroup) return;
 
     await ensureChatParticipants(chat);
+
     const senderContact = await msg.getContact();
-    const rawSender = msg.author || (senderContact && senderContact.id) || msg.from;
-    const SENDER_ID = normalizeId(rawSender);
+    const SENDER_ID = normalizeId(msg.author || senderContact.id || msg.from);
+
     const senderParticipant = findParticipantById(chat, SENDER_ID);
-    const senderIsAdmin = Boolean(senderParticipant && (senderParticipant.isAdmin || senderParticipant.isSuperAdmin));
+    const senderIsAdmin = Boolean(senderParticipant?.isAdmin || senderParticipant?.isSuperAdmin);
 
-    if (!BOT_ID && client.info) {
-      BOT_ID = normalizeId(client.info.wid || client.info.me || client.info);
-    }
     const botParticipant = findParticipantById(chat, BOT_ID);
-    const botIsAdmin = Boolean(botParticipant && (botParticipant.isAdmin || botParticipant.isSuperAdmin));
+    const botIsAdmin = Boolean(botParticipant?.isAdmin || botParticipant?.isSuperAdmin);
 
-    const text = (msg.body || '').toString().trim().toLowerCase();
+    const text = msg.body?.trim().toLowerCase();
 
-    // Comando !link - envia link do grupo
-    if (text === '!link') {
-      if (!botIsAdmin) {
-        await chat.sendMessage('*❌ Preciso ser admin para gerar o link do grupo!*');
-        return;
-      }
-      try {
-        const inviteCode = await chat.getInviteCode();
-        if (!inviteCode) {
-          await chat.sendMessage('*❌ Não consegui obter o código do convite. Talvez o link esteja desativado.*');
-          return;
-        }
-        const inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
-        await chat.sendMessage(`🔗 Link do grupo: ${inviteLink}`);
-      } catch (err) {
-        console.error('Erro ao gerar link:', err);
-        await chat.sendMessage('*❌ Erro ao gerar o link. Certifique-se que sou admin e que o link do grupo está ativado.*');
-      }
-      return;
-    }
-
-    // O resto do seu código para bloqueio de links e etc...
-
-  } catch (err) {
-    console.error('Erro na mensagem:', err);
-  }
-});
-
-
-    // Comando !link - envia link do grupo
     if (text === '!link') {
       try {
         const inviteCode = await chat.getInviteCode();
         const inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
         await chat.sendMessage(`🔗 Link do grupo: ${inviteLink}`);
       } catch (err) {
-        console.error('Erro ao gerar link:', err);
-        await chat.sendMessage('*❌ Não consegui obter o link. Verifique se sou admin do grupo.*');
+        await chat.sendMessage('*❌ Não consegui obter o link. Me torne admin.*');
       }
       return;
     }
 
-    // Bloqueio de links proibidos
-    const prohibitedLinks = /(?:https?:\/\/\S+|www\.\S+|tiktok\.com|kwai\.com|mercadolivre\.com|shopee\.com|instagram\.com|wa\.me)/i;
+    const prohibitedLinks = /(?:https?:\/\/\S+|www\.\S+|tiktok\.com|kwai\.com|mercadolivre|shopee|instagram\.com|wa\.me)/i;
 
     if (prohibitedLinks.test(text)) {
-      if (senderIsAdmin) return;
-      if (!botIsAdmin) return;
+      if (senderIsAdmin || !botIsAdmin) return;
 
-      const chatIdKey = normalizeId(chat.id && chat.id._serialized) || chat.id;
+      const chatIdKey = normalizeId(chat.id);
       const last = lastWarningAt.get(chatIdKey) || 0;
       if (Date.now() - last < WARNING_COOLDOWN_MS) {
-        try { await msg.delete(true); } catch (e) {}
+        try { await msg.delete(true); } catch {}
         return;
       }
 
       try {
         await msg.delete(true);
-        const mention = senderContact ? [senderContact] : [];
-        await chat.sendMessage(`⚠️ @${senderContact.number} — *Proibido enviar links! ❌*`, { mentions: mention });
+        await chat.sendMessage(`⚠️ @${senderContact.number} — *Proibido enviar links!* ❌`, {
+          mentions: [senderContact]
+        });
         lastWarningAt.set(chatIdKey, Date.now());
       } catch (err) {
-        console.error('Erro ao apagar ou avisar:', err);
+        console.error('Erro ao deletar/avisar:', err);
       }
     }
 
@@ -201,69 +141,75 @@ client.on('message', async msg => {
   }
 });
 
-// Função para fechar grupo (admins)
-const closeGroup = async (chat) => {
+// ===== CONTROLE DE GRUPO =====
+
+async function closeGroup(chat) {
   try {
     await ensureChatParticipants(chat);
     const botParticipant = findParticipantById(chat, BOT_ID);
-    if (!botParticipant || !botParticipant.isAdmin) return;
-    if (typeof chat.setMessagesAdminsOnly === 'function') {
-      await chat.setMessagesAdminsOnly(true);
-    }
-    await chat.sendMessage('*🔒 Grupo fechado! Boa noite! 😴*');
+    if (!botParticipant?.isAdmin) return;
+    await chat.setMessagesAdminsOnly(true);
+    await chat.sendMessage('*🔒 Grupo fechado! Boa noite!* 😴');
   } catch (e) {
     console.error('Erro ao fechar grupo:', e);
   }
-};
+}
 
-// Função para abrir grupo (admins)
-const openGroup = async (chat) => {
+async function openGroup(chat) {
   try {
     await ensureChatParticipants(chat);
     const botParticipant = findParticipantById(chat, BOT_ID);
-    if (!botParticipant || !botParticipant.isAdmin) return;
-    if (typeof chat.setMessagesAdminsOnly === 'function') {
-      await chat.setMessagesAdminsOnly(false);
-    }
-    await chat.sendMessage('*🔓 Grupo aberto! Bom dia! ☀️*');
+    if (!botParticipant?.isAdmin) return;
+    await chat.setMessagesAdminsOnly(false);
+    await chat.sendMessage('*🔓 Grupo aberto! Bom dia!* ☀️');
   } catch (e) {
     console.error('Erro ao abrir grupo:', e);
   }
-};
+}
 
-// Cron para fechar grupo às 22h e abrir às 7h no fuso America/Fortaleza
-const scheduleGroupControl = () => {
+function scheduleGroupControl() {
   cron.schedule('0 22 * * *', async () => {
     log('🔒 Fechando grupos (22:00)...');
-    try {
-      const chats = await client.getChats();
-      for (const c of chats) {
-        if (c.isGroup) await closeGroup(c);
-      }
-    } catch (e) {
-      console.error('Erro ao fechar grupos:', e);
+    const chats = await client.getChats();
+    for (const c of chats) {
+      if (c.isGroup) await closeGroup(c);
     }
   }, { timezone: 'America/Fortaleza' });
 
   cron.schedule('0 7 * * *', async () => {
     log('🔓 Abrindo grupos (07:00)...');
-    try {
-      const chats = await client.getChats();
-      for (const c of chats) {
-        if (c.isGroup) await openGroup(c);
-      }
-    } catch (e) {
-      console.error('Erro ao abrir grupos:', e);
+    const chats = await client.getChats();
+    for (const c of chats) {
+      if (c.isGroup) await openGroup(c);
     }
   }, { timezone: 'America/Fortaleza' });
-};
+}
 
-// Endpoint para servir a imagem do QR Code sempre atualizada
+// ===== EXPRESS SERVER =====
+
 app.get('/qr-image', async (req, res) => {
   if (!lastQRCode) {
-    return res.status(404).send('QR Code ainda não gerado, aguarde...');
+    return res.status(404).send('QR Code ainda não gerado.');
   }
   try {
     const dataUrl = await qrcode.toDataURL(lastQRCode);
-    const img = Buffer.from(dataUrl.split(',')[
+    const img = Buffer.from(dataUrl.split(',')[1], 'base64');
+    res.writeHead(200, {
+      'Content-Type': 'image/png',
+      'Content-Length': img.length,
+      'Cache-Control': 'no-cache, no-store, must-revalidate'
+    });
+    res.end(img);
+  } catch (err) {
+    console.error('Erro ao gerar QR:', err);
+    res.status(500).send('Erro ao gerar imagem.');
+  }
+});
 
+// ===== INICIAR =====
+
+app.listen(PORT, '0.0.0.0', () => {
+  log(`🌐 Servidor online — http://localhost:${PORT}/qr-image`);
+});
+
+client.initialize();
